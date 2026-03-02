@@ -1,0 +1,6 @@
+{
+    "ispconfig_url": "https://your-server/remote/index.php",
+    "ispconfig_user": "your_ispconfig_user",
+    "ispconfig_pass": "your_ispconfig_password",
+    "bunny_net_api_key": "your_bunny_net_api_key"
+}
