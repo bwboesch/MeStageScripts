@@ -8,6 +8,17 @@
 #
 
 # ============================================================
+# Umgebung für Cron sicherstellen
+# ============================================================
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+# Logfile für Cron-Debugging
+LOGFILE="/var/log/deploy_cron.log"
+exec > >(tee -a "$LOGFILE") 2>&1
+
+# ============================================================
 # Locking – verhindert parallele Ausführung
 # ============================================================
 
