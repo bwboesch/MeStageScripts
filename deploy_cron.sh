@@ -69,9 +69,13 @@ HOSTNAME=$(hostname -f)
 MAIL_SENT=0           # Flag: wurde die Mail bereits gesendet?
 MAIL_SUBJECT=""       # Betreff (wird im Lauf gesetzt)
 MAIL_BODY=""          # Mail-Body (wird im Lauf aufgebaut)
+MAIL_ATTACHMENTS=()   # Dateianhänge (Pfade zu Logdateien)
 ERRORS=0              # Fehlerzähler
 PHASE="Initialisierung"  # Aktuelle Phase für Abbruch-Mails
 CAUGHT_SIGNAL=""      # Welches Signal wurde empfangen?
+
+# Temporäres Verzeichnis für Anhänge
+TMPDIR_MAIL=$(mktemp -d /tmp/deploy_cron_mail.XXXXXX)
 
 # ============================================================
 # Funktionen
@@ -113,16 +117,29 @@ send_mail() {
     log_info "Sende Mail an: ${to_list}"
     log_info "Betreff: ${SUBJECT_PREFIX} ${subject}"
     log_info "SMTP-Server: ${SMTP_SERVER}"
+    log_info "Anhänge: ${#MAIL_ATTACHMENTS[@]}"
 
-    swaks \
-        --server "$SMTP_SERVER" \
-        --from "$MAIL_FROM" \
-        --to "$to_list" \
-        --header "Subject: ${SUBJECT_PREFIX} ${subject}" \
-        --header "Content-Type: text/plain; charset=UTF-8" \
-        --body "$body" \
-        --silent 2 \
+    # swaks-Kommando zusammenbauen
+    local swaks_cmd=(
+        swaks
+        --server "$SMTP_SERVER"
+        --from "$MAIL_FROM"
+        --to "$to_list"
+        --header "Subject: ${SUBJECT_PREFIX} ${subject}"
+        --header "MIME-Version: 1.0"
+        --body "$body"
+        --silent 2
         --timeout 30
+    )
+
+    # Anhänge hinzufügen
+    for attachment in "${MAIL_ATTACHMENTS[@]}"; do
+        if [ -f "$attachment" ]; then
+            swaks_cmd+=(--attach-type "text/plain" --attach "@${attachment}")
+        fi
+    done
+
+    "${swaks_cmd[@]}"
 
     if [ $? -eq 0 ]; then
         log_ok "Mail erfolgreich versendet"
@@ -130,6 +147,9 @@ send_mail() {
     else
         log_err "Mailversand fehlgeschlagen!"
     fi
+
+    # Temporäre Anhänge aufräumen
+    rm -rf "$TMPDIR_MAIL"
 }
 
 format_duration() {
@@ -140,7 +160,7 @@ format_duration() {
 run_script() {
     local label="$1"
     local script="$2"
-    local output=""
+    local output_file="$3"
     local rc=0
 
     PHASE="$label"
@@ -155,14 +175,14 @@ run_script() {
     if [ ! -f "$script" ]; then
         log_err "Script nicht gefunden: ${script}"
         rc=1
-        output="FEHLER: Script nicht gefunden: ${script}"
+        echo "FEHLER: Script nicht gefunden: ${script}" > "$output_file"
     elif [ ! -x "$script" ]; then
         log_err "Script nicht ausführbar: ${script}"
         rc=1
-        output="FEHLER: Script nicht ausführbar: ${script}"
+        echo "FEHLER: Script nicht ausführbar: ${script}" > "$output_file"
     else
         log_info "Ausführung läuft..."
-        output=$("$script" 2>&1)
+        "$script" > "$output_file" 2>&1
         rc=$?
     fi
 
@@ -174,16 +194,17 @@ run_script() {
         log_ok "${label} abgeschlossen (Exit-Code: ${rc}, Dauer: ${duration})"
     else
         log_err "${label} fehlgeschlagen (Exit-Code: ${rc}, Dauer: ${duration})"
-        log_err "Ausgabe:"
-        echo "$output" | sed 's/^/    /'
+        log_err "Ausgabe (siehe Anhang): ${output_file}"
     fi
+
+    # Output-Datei als Mail-Anhang registrieren
+    MAIL_ATTACHMENTS+=("$output_file")
 
     # Ergebnis in globale Variablen schreiben
     _RESULT_START_FMT="$start_fmt"
     _RESULT_END_FMT="$end_fmt"
     _RESULT_DURATION="$duration"
     _RESULT_RC=$rc
-    _RESULT_OUTPUT="$output"
 }
 
 # ============================================================
@@ -321,7 +342,7 @@ ERRORS=0
 
 # --- deploy2live.sh ---
 PHASE="Deploy Live"
-run_script "Deploy Live" "$SCRIPT_LIVE"
+run_script "Deploy Live" "$SCRIPT_LIVE" "${TMPDIR_MAIL}/deploy2live.log"
 
 MAIL_BODY+="
 [1] Deploy Live (deploy2live.sh)
@@ -329,18 +350,16 @@ MAIL_BODY+="
     Ende:     ${_RESULT_END_FMT}
     Dauer:    ${_RESULT_DURATION}
     Status:   $([ $_RESULT_RC -eq 0 ] && echo 'OK' || echo "FEHLER (Exit-Code: ${_RESULT_RC})")
+    Output:   siehe Anhang deploy2live.log
 "
 
 if [ $_RESULT_RC -ne 0 ]; then
-    MAIL_BODY+="    Ausgabe:
-${_RESULT_OUTPUT}
-"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- sync2china.sh ---
 PHASE="Sync China"
-run_script "Sync China" "$SCRIPT_CHINA"
+run_script "Sync China" "$SCRIPT_CHINA" "${TMPDIR_MAIL}/sync2china.log"
 
 MAIL_BODY+="
 [2] Sync China (sync2china.sh)
@@ -348,12 +367,10 @@ MAIL_BODY+="
     Ende:     ${_RESULT_END_FMT}
     Dauer:    ${_RESULT_DURATION}
     Status:   $([ $_RESULT_RC -eq 0 ] && echo 'OK' || echo "FEHLER (Exit-Code: ${_RESULT_RC})")
+    Output:   siehe Anhang sync2china.log
 "
 
 if [ $_RESULT_RC -ne 0 ]; then
-    MAIL_BODY+="    Ausgabe:
-${_RESULT_OUTPUT}
-"
     ERRORS=$((ERRORS + 1))
 fi
 
